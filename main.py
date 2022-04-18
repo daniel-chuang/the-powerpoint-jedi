@@ -43,15 +43,14 @@ to the position of the wrist (node 0).
 which_hand = "Right"
 
 ### Imports ###
-from shutil import which
-from sre_parse import expand_template
-import cv2 # OpenCV
-import mediapipe as mp # Google Mediapipe
-import pyautogui as gui # PySimpleGUI
-from google.protobuf.json_format import MessageToDict # Converting class
-from sklearn.linear_model import LinearRegression
-import numpy as np
-from math import dist
+import cv2 # OpenCV for Imaging
+import mediapipe as mp # Google Mediapipe for Hand Landmarks
+import pyautogui as gui # For controlling the computer
+from google.protobuf.json_format import MessageToDict # For Converting class
+from sklearn.linear_model import LinearRegression # To check which hands are extended
+import numpy as np # For matrix work
+from math import dist # To calculate hand landmark distance
+from time import time # To set the cooldown between gestures
 
 from pprint import pprint # For development: to print the landmark values nicely
 
@@ -64,6 +63,9 @@ mp_hands = mp.solutions.hands # The main model
 ## Webcam input and output
 def main():
     cap = cv2.VideoCapture(0)
+    gesture_log = [] # List of the past 5 gestures to check for swipe
+    last_swipe = time() # Setting it to avoid errors
+    last_swipe_type = "none" # Setting it to avoid errors
     while cap.isOpened():
         success, image = cap.read() # Reads the video capture from OpenCV
         image = cv2.flip(image, 1) # Flipped for selfie view
@@ -79,9 +81,50 @@ def main():
 
         # Gets the landmarks of the chosen hand
         hand_landmarks = chosen_hand_landmarks(results)
+
+        # If there are landmarks, check for the extended fingers
         if hand_landmarks is not None:
             extended_list = check_raised_fingers(hand_landmarks)
-            pprint(check_gesture(extended_list, hand_landmarks, which_hand))
+
+            # Then, use the extended fingers to check for a gesture!
+            current_gesture = check_gesture(extended_list, hand_landmarks, which_hand)
+            if current_gesture == "Facing":
+                if gesture_log.count("Away") > 2 and (time() - last_swipe > 2 or last_swipe_type == "back"):
+                    print("SWIPING: SLIDE BACK")
+                    gui.keyDown("left")
+                    gui.keyUp("left")
+                    gesture_log = []
+                    last_swipe = time()
+                    last_swipe_type = "back"
+            elif current_gesture == "Away":
+                if gesture_log.count("Facing") > 2 and (time() - last_swipe > 2 or last_swipe_type == "forward"):
+                    print("SWIPING: SLIDE FORWARD")
+                    gui.keyDown("right")
+                    gui.keyUp("right")
+                    gesture_log = []
+                    last_swipe = time()
+                    last_swipe_type = "forward"
+            elif current_gesture == "Three-Up":
+                if gesture_log.count("Fist") > 5:
+                    print("SWIPING: OPENING DISPLAY")
+                    gui.keyDown("command")
+                    gui.keyDown("enter")
+                    gui.keyUp("command")
+                    gui.keyUp("enter")
+                    gesture_log = []
+                    last_swipe = time()
+                    last_swipe_type = "opening"
+            elif current_gesture == "Fist":
+                if gesture_log.count("Three-Up") > 5:
+                    print("SWIPING: OPENING DISPLAY")
+                    gui.keyDown("esc")
+                    gui.keyUp("esc")
+                    gesture_log = []
+                    last_swipe = time()
+                    last_swipe_type = "closing"
+            gesture_log.insert(0, current_gesture)
+            if len(gesture_log) > 10:
+                gesture_log = gesture_log[0:9] # Limit log to 8
 
 
         # Shows the resulting image (for development)
@@ -209,6 +252,14 @@ def check_gesture(extended_list, hand_lankmarks, which_hand):
                 return "Away"
             else:
                 return "Facing"
+    
+    # Three fingers pointing
+    if False not in extended_list[1:4] and extended_list[4] == False:
+        return "Three-Up"
+    
+    if True not in extended_list[1:5]:
+        return "Fist"
+
     return "None"
 
 
