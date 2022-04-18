@@ -43,10 +43,17 @@ to the position of the wrist (node 0).
 which_hand = "Right"
 
 ### Imports ###
+from shutil import which
+from sre_parse import expand_template
 import cv2 # OpenCV
 import mediapipe as mp # Google Mediapipe
 import pyautogui as gui # PySimpleGUI
 from google.protobuf.json_format import MessageToDict # Converting class
+from sklearn.linear_model import LinearRegression
+import numpy as np
+from math import dist
+
+from pprint import pprint # For development: to print the landmark values nicely
 
 # Setting up Mediapipe
 mp_drawing = mp.solutions.drawing_utils
@@ -72,7 +79,10 @@ def main():
 
         # Gets the landmarks of the chosen hand
         hand_landmarks = chosen_hand_landmarks(results)
-        print(hand_landmarks)
+        if hand_landmarks is not None:
+            extended_list = check_raised_fingers(hand_landmarks)
+            pprint(check_gesture(extended_list, hand_landmarks, which_hand))
+
 
         # Shows the resulting image (for development)
         cv2.imshow('MediaPipe Hands', image) 
@@ -114,7 +124,7 @@ def draw_hands(image, results):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     return image
 
-## Assigns left or right
+## Assigns left or right, converts data to a list
 def handedness(results):
     if results.multi_handedness == None:
         return []
@@ -139,14 +149,68 @@ def chosen_hand_landmarks(results):
     
     # Getting the hand landmarks of the correct hand
     if hand_index != None:
-        hand_landmarks = results.multi_hand_landmarks[hand_index]
+        hand_landmarks_raw = results.multi_hand_landmarks[hand_index]
+        hand_landmarks_raw = MessageToDict(hand_landmarks_raw)["landmark"]
+        
+        # Currently a list of dicts, converting to a matrix
+        hand_landmarks = np.zeros(shape=[1,3]) # Creating an empty array
+        for landmark in hand_landmarks_raw:
+            hand_landmarks = np.vstack([hand_landmarks, list(landmark.values())])
+        hand_landmarks = hand_landmarks[1:22]
         return hand_landmarks
 
-## Checking hand gesture type
+## Returns an array of raised fingers
 # Either None, Right-Point, or Left-Point
-def check_gesture():
+# - Uses hand_landmarks instead of results for only 1 hand
+def check_raised_fingers(hand_landmarks): # Numpy array type
+    if hand_landmarks is None:
+        return None
 
-    pass
+    model = LinearRegression()
+
+    # Performing a linear regression to check which fingers are extended
+    finger_list = [] # thumb, second, middle, ring, pinky
+    for iter in range(0, 5): # Iterating through fingers
+        landmark_start = (iter * 4) + 1 # Starts the index at the first landmark
+
+        # Have to flatten x and y for SciPy
+        x = hand_landmarks[landmark_start:landmark_start + 4, 0].reshape(-1, 1)
+        y = hand_landmarks[landmark_start:landmark_start + 4, 1].reshape(-1, 1)
+        model.fit(x, y)
+        finger_list.append({"slope": model.coef_, "intercept": model.intercept_, "r_sq" : model.score(x, y)})
+
+    # Making a list for extended and not extended fingers
+    extended_list = [True if finger["r_sq"] > 0.85 else False for finger in finger_list]
+    
+    # Verifying that extended fingers are extended by checking if the tip is the farthest
+    for iter in range(len(extended_list)):
+        if extended_list[iter] == True:
+            landmark_start = (iter * 4) + 1 # Starts the index at the first landmark
+            distance_base = dist(hand_landmarks[landmark_start + 1, 0:2], hand_landmarks[0, 0:2])
+            distance_tip = dist(hand_landmarks[landmark_start + 3, 0:2], hand_landmarks[0, 0:2])
+            if distance_tip <= distance_base:
+                extended_list[iter] = False
+
+    return extended_list
+
+## Either returns a gesture or none using a list of extended fingers
+def check_gesture(extended_list, hand_lankmarks, which_hand):
+    # Two fingers pointing
+    if False not in extended_list[1:3] and (True not in extended_list[3:5]):
+        # Checking for palm facing (outward or inward)
+        if which_hand == "Right":
+            # Checking x position of second finger compared to thumb
+            if hand_lankmarks[8, 0] > hand_lankmarks[4, 0]:
+                return "Facing"
+            else:
+                return "Away"
+        elif which_hand == "Left": # For left hand
+            if hand_lankmarks[8, 0] > hand_lankmarks[4, 0]:
+                return "Away"
+            else:
+                return "Facing"
+    return "None"
+
 
 ### Running the script ###
 if __name__ == "__main__":
